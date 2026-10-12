@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 	"watchtower/config"
+	"watchtower/cyber"
 	"watchtower/feeds"
 	"watchtower/intel"
 	"watchtower/markets"
@@ -18,11 +19,12 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Tab indices — 3 tabs now
+// Tab indices
 const (
 	TabOverview = iota
 	TabNews
 	TabLocal
+	TabCyber
 	tabCount
 )
 
@@ -36,7 +38,16 @@ type (
 		items []feeds.NewsItem
 		err   error
 	}
-	cryptoMsg struct {
+	cyberNewsMsg struct {
+		items []feeds.NewsItem
+		err   error
+	}
+	cyberIntelMsg struct {
+		intel *cyber.Intel
+		err   error
+	}
+	cyberTickMsg time.Time
+	cryptoMsg    struct {
 		prices []markets.CryptoPrice
 		err    error
 	}
@@ -94,6 +105,8 @@ type Model struct {
 	forecast     []weather.DayForecast
 	brief        *intel.Brief
 	localBrief   *intel.LocalBrief
+	cyberNews    []feeds.NewsItem
+	cyberIntel   *cyber.Intel
 
 	// Article selection per list tab (for browser open)
 	sel          [tabCount]listSelection
@@ -137,6 +150,8 @@ func (m Model) Init() tea.Cmd {
 		tickEvery(time.Duration(m.cfg.RefreshSec)*time.Second),
 		loadCachedBrief(m.cfg),
 		loadCachedLocalBrief(m.cfg),
+		fetchCyberIntel(),
+		tickCyber(),
 	)
 }
 
@@ -153,6 +168,7 @@ func doRefreshAll(cfg *config.Config) tea.Cmd {
 		fetchCommodities(),
 		fetchPolymarket(),
 		fetchWeather(cfg.Location.Latitude, cfg.Location.Longitude, cfg.Location.City),
+		fetchCyberNews(),
 	)
 }
 
@@ -198,9 +214,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Height: m.height,
 				}
 			})
+		case "4":
+			m.activeTab = TabCyber
 		case "r":
 			m.lastRefresh = time.Time{}
-			cmds = append(cmds, doRefreshAll(m.cfg))
+			cmds = append(cmds, doRefreshAll(m.cfg), fetchCyberIntel())
 		case "b":
 			if m.cfg.LLMAPIKey != "" {
 				m.loading["brief"] = true
@@ -311,6 +329,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.renderListTab(TabLocal)
+
+	case cyberNewsMsg:
+		delete(m.loading, "cyberNews")
+		if msg.err != nil {
+			m.errors["cyberNews"] = msg.err.Error()
+		} else {
+			m.cyberNews = msg.items
+			delete(m.errors, "cyberNews")
+		}
+		m.renderListTab(TabCyber)
+
+	case cyberIntelMsg:
+		delete(m.loading, "cyberIntel")
+		if msg.err != nil {
+			m.errors["cyberIntel"] = msg.err.Error()
+		} else {
+			m.cyberIntel = msg.intel
+			delete(m.errors, "cyberIntel")
+		}
+		m.renderListTab(TabCyber)
+
+	case cyberTickMsg:
+		cmds = append(cmds, fetchCyberIntel(), tickCyber())
 
 	case cryptoMsg:
 		delete(m.loading, "crypto")
@@ -456,7 +497,7 @@ func (m Model) renderHeader() string {
 }
 
 func (m Model) renderTabs() string {
-	names := []string{"1 Overview", "2 Global News", "3 Local"}
+	names := []string{"1 Overview", "2 Global News", "3 Local", "4 Cyber"}
 	var parts []string
 	for i, name := range names {
 		if i == m.activeTab {
@@ -489,10 +530,13 @@ func (m Model) renderFooter() string {
 		hint = "  jk navigate  enter open in browser  d/u page  g/G top/bottom  tab switch  r refresh  b brief  q quit"
 	case TabLocal:
 		hint = "  jk navigate  enter open in browser  d/u page  g/G top/bottom  tab switch  r refresh  i local brief  q quit"
+	case TabCyber:
+		hint = "  jk navigate  enter open in browser  d/u page  g/G top/bottom  tab switch  r refresh  q quit"
 	default:
-		hint = "  ↑↓/jk scroll  tab/←→ switch  1 overview  2 news  3 local  r refresh  b brief  q quit"
+		hint = "  ↑↓/jk scroll  tab/←→ switch  1 overview  2 news  3 local  4 cyber  r refresh  b brief  q quit"
 	}
-	return StyleFooter.Width(m.width).Render(hint)
+	// Cut the hint rather than letting it wrap onto a second line on narrow terminals
+	return StyleFooter.Width(m.width).Render(truncate(hint, m.width-2))
 }
 
 // ─── Overview: 2×2 grid ───────────────────────────────────────────────────────
@@ -1232,6 +1276,8 @@ func (m *Model) listItems(tab int) []feeds.NewsItem {
 		return m.globalNews
 	case TabLocal:
 		return m.localNews
+	case TabCyber:
+		return m.cyberNews
 	}
 	return nil
 }
@@ -1244,6 +1290,8 @@ func (m *Model) renderListTab(tab int) {
 		content, m.sel[tab].hdrLines = m.renderNewsContent()
 	case TabLocal:
 		content, m.sel[tab].hdrLines = m.renderLocalContent()
+	case TabCyber:
+		content, m.sel[tab].hdrLines = m.renderCyberContent()
 	default:
 		return
 	}
@@ -1282,6 +1330,26 @@ func fetchLocalNews(city, country string) tea.Cmd {
 		items, err := feeds.FetchLocalNews(context.Background(), city, country)
 		return localNewsMsg{items, err}
 	}
+}
+
+func fetchCyberNews() tea.Cmd {
+	return func() tea.Msg {
+		items, err := feeds.FetchCyberNews(context.Background())
+		return cyberNewsMsg{items, err}
+	}
+}
+
+func fetchCyberIntel() tea.Cmd {
+	return func() tea.Msg {
+		in, err := cyber.FetchIntel(context.Background(), kevWindow)
+		return cyberIntelMsg{in, err}
+	}
+}
+
+// tickCyber schedules the next KEV/EPSS/Infocon refresh; these change at most
+// a few times a day, so they run hourly rather than on the main refresh tick
+func tickCyber() tea.Cmd {
+	return tea.Tick(time.Hour, func(t time.Time) tea.Msg { return cyberTickMsg(t) })
 }
 
 func fetchCrypto(pairs []string) tea.Cmd {
