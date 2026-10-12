@@ -1,9 +1,7 @@
 package intel
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -185,13 +183,18 @@ Rules:
 HEADLINES:
 %s`, sb.String())
 
-	if cfg.Provider == ProviderClaude {
-		return generateClaudeBrief(ctx, cfg, prompt)
+	text, model, err := complete(ctx, cfg, "You are a geopolitical intelligence analyst.", prompt, 700)
+	if err != nil {
+		return nil, err
 	}
-	if cfg.Provider == ProviderGemini {
-		return generateGeminiBrief(ctx, cfg, prompt)
-	}
-	return generateOpenAICompatibleBrief(ctx, cfg, prompt)
+	summary, threats, risks := parseBriefResponse(text)
+	return &Brief{
+		Summary:      summary,
+		KeyThreats:   threats,
+		CountryRisks: risks,
+		GeneratedAt:  time.Now(),
+		Model:        model,
+	}, nil
 }
 
 // GenerateLocalBrief calls the configured LLM to synthesize a local news and weather summary
@@ -255,370 +258,14 @@ Rules:
 DATA:
 %s`, city, sb.String())
 
-	if cfg.Provider == ProviderClaude {
-		return generateClaudeLocalBrief(ctx, cfg, prompt)
-	}
-	if cfg.Provider == ProviderGemini {
-		return generateGeminiLocalBrief(ctx, cfg, prompt)
-	}
-	return generateOpenAICompatibleLocalBrief(ctx, cfg, prompt)
-}
-
-func generateOpenAICompatibleBrief(ctx context.Context, cfg LLMConfig, prompt string) (*Brief, error) {
-	body := map[string]interface{}{
-		"model":       cfg.ModelName(),
-		"temperature": 0,
-		"max_tokens":  700,
-		"messages": []map[string]string{
-			{"role": "user", "content": prompt},
-		},
-	}
-
-	bodyBytes, err := json.Marshal(body)
+	text, model, err := complete(ctx, cfg, "You are a local news and weather analyst.", prompt, 300)
 	if err != nil {
 		return nil, err
 	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", cfg.Endpoint(), bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set(cfg.AuthHeader(), cfg.AuthValue())
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("%s request failed: %w", cfg.Provider, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("%s HTTP %d", cfg.Provider, resp.StatusCode)
-	}
-
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-		Model string `json:"model"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decoding %s response: %w", cfg.Provider, err)
-	}
-	if len(result.Choices) == 0 {
-		return nil, fmt.Errorf("no response from %s", cfg.Provider)
-	}
-
-	summary, threats, risks := parseBriefResponse(result.Choices[0].Message.Content)
-
-	return &Brief{
-		Summary:      summary,
-		KeyThreats:   threats,
-		CountryRisks: risks,
-		GeneratedAt:  time.Now(),
-		Model:        result.Model,
-	}, nil
-}
-
-func generateOpenAICompatibleLocalBrief(ctx context.Context, cfg LLMConfig, prompt string) (*LocalBrief, error) {
-	body := map[string]interface{}{
-		"model":       cfg.ModelName(),
-		"temperature": 0,
-		"max_tokens":  300,
-		"messages": []map[string]string{
-			{"role": "user", "content": prompt},
-		},
-	}
-
-	bodyBytes, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", cfg.Endpoint(), bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set(cfg.AuthHeader(), cfg.AuthValue())
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("%s request failed: %w", cfg.Provider, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("%s HTTP %d", cfg.Provider, resp.StatusCode)
-	}
-
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-		Model string `json:"model"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decoding %s response: %w", cfg.Provider, err)
-	}
-	if len(result.Choices) == 0 {
-		return nil, fmt.Errorf("no response from %s", cfg.Provider)
-	}
-
-	summary := parseLocalBriefResponse(result.Choices[0].Message.Content)
-
 	return &LocalBrief{
-		Summary:     summary,
+		Summary:     parseLocalBriefResponse(text),
 		GeneratedAt: time.Now(),
-		Model:       result.Model,
-	}, nil
-}
-
-func generateClaudeBrief(ctx context.Context, cfg LLMConfig, prompt string) (*Brief, error) {
-	body := map[string]interface{}{
-		"model":       cfg.ModelName(),
-		"max_tokens":  700,
-		"temperature": 0,
-		"system":      "You are a geopolitical intelligence analyst.",
-		"messages": []map[string]string{
-			{"role": "user", "content": prompt},
-		},
-	}
-
-	bodyBytes, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", cfg.Endpoint(), bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set(cfg.AuthHeader(), cfg.AuthValue())
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("claude request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("claude HTTP %d", resp.StatusCode)
-	}
-
-	var result struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decoding claude response: %w", err)
-	}
-	if len(result.Content) == 0 {
-		return nil, fmt.Errorf("no response from claude")
-	}
-
-	summary, threats, risks := parseBriefResponse(result.Content[0].Text)
-
-	return &Brief{
-		Summary:      summary,
-		KeyThreats:   threats,
-		CountryRisks: risks,
-		GeneratedAt:  time.Now(),
-		Model:        cfg.ModelName(),
-	}, nil
-}
-
-func generateClaudeLocalBrief(ctx context.Context, cfg LLMConfig, prompt string) (*LocalBrief, error) {
-	body := map[string]interface{}{
-		"model":       cfg.ModelName(),
-		"max_tokens":  300,
-		"temperature": 0,
-		"system":      "You are a local news and weather analyst.",
-		"messages": []map[string]string{
-			{"role": "user", "content": prompt},
-		},
-	}
-
-	bodyBytes, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", cfg.Endpoint(), bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set(cfg.AuthHeader(), cfg.AuthValue())
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("claude request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("claude HTTP %d", resp.StatusCode)
-	}
-
-	var result struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decoding claude response: %w", err)
-	}
-	if len(result.Content) == 0 {
-		return nil, fmt.Errorf("no response from claude")
-	}
-
-	summary := parseLocalBriefResponse(result.Content[0].Text)
-
-	return &LocalBrief{
-		Summary:     summary,
-		GeneratedAt: time.Now(),
-		Model:       cfg.ModelName(),
-	}, nil
-}
-
-func generateGeminiBrief(ctx context.Context, cfg LLMConfig, prompt string) (*Brief, error) {
-	body := map[string]interface{}{
-		"contents": []map[string]interface{}{
-			{
-				"parts": []map[string]string{
-					{"text": prompt},
-				},
-			},
-		},
-		"generationConfig": map[string]interface{}{
-			"temperature":     0,
-			"maxOutputTokens": 700,
-		},
-	}
-
-	bodyBytes, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", cfg.Endpoint(), bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set(cfg.AuthHeader(), cfg.AuthValue())
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("gemini request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("gemini HTTP %d", resp.StatusCode)
-	}
-
-	var result struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decoding gemini response: %w", err)
-	}
-	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
-		return nil, fmt.Errorf("no response from gemini")
-	}
-
-	summary, threats, risks := parseBriefResponse(result.Candidates[0].Content.Parts[0].Text)
-
-	return &Brief{
-		Summary:      summary,
-		KeyThreats:   threats,
-		CountryRisks: risks,
-		GeneratedAt:  time.Now(),
-		Model:        cfg.ModelName(),
-	}, nil
-}
-
-func generateGeminiLocalBrief(ctx context.Context, cfg LLMConfig, prompt string) (*LocalBrief, error) {
-	body := map[string]interface{}{
-		"contents": []map[string]interface{}{
-			{
-				"parts": []map[string]string{
-					{"text": prompt},
-				},
-			},
-		},
-		"generationConfig": map[string]interface{}{
-			"temperature":     0,
-			"maxOutputTokens": 300,
-		},
-	}
-
-	bodyBytes, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", cfg.Endpoint(), bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set(cfg.AuthHeader(), cfg.AuthValue())
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("gemini request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("gemini HTTP %d", resp.StatusCode)
-	}
-
-	var result struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decoding gemini response: %w", err)
-	}
-	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
-		return nil, fmt.Errorf("no response from gemini")
-	}
-
-	summary := parseLocalBriefResponse(result.Candidates[0].Content.Parts[0].Text)
-
-	return &LocalBrief{
-		Summary:     summary,
-		GeneratedAt: time.Now(),
-		Model:       cfg.ModelName(),
+		Model:       model,
 	}, nil
 }
 
@@ -645,62 +292,12 @@ func parseLocalBriefResponse(content string) string {
 }
 
 func parseBriefResponse(content string) (string, []string, []CountryRisk) {
-	var summary string
-	var threats []string
-	var risks []CountryRisk
-
-	// Split into sections
-	sections := map[string]string{}
-	current := ""
-	var buf strings.Builder
-
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		switch trimmed {
-		case "SUMMARY:":
-			if current != "" {
-				sections[current] = strings.TrimSpace(buf.String())
-			}
-			current = "SUMMARY"
-			buf.Reset()
-		case "THREATS:":
-			if current != "" {
-				sections[current] = strings.TrimSpace(buf.String())
-			}
-			current = "THREATS"
-			buf.Reset()
-		case "COUNTRY_RISKS:":
-			if current != "" {
-				sections[current] = strings.TrimSpace(buf.String())
-			}
-			current = "COUNTRY_RISKS"
-			buf.Reset()
-		default:
-			if current != "" {
-				buf.WriteString(line + "\n")
-			}
-		}
-	}
-	if current != "" {
-		sections[current] = strings.TrimSpace(buf.String())
-	}
-
-	// Parse SUMMARY
-	summary = sections["SUMMARY"]
-
-	// Parse THREATS
-	for _, line := range strings.Split(sections["THREATS"], "\n") {
-		line = strings.TrimSpace(line)
-		line = strings.TrimPrefix(line, "•")
-		line = strings.TrimPrefix(line, "-")
-		line = strings.TrimPrefix(line, "*")
-		line = strings.TrimSpace(line)
-		if line != "" {
-			threats = append(threats, line)
-		}
-	}
+	sections := parseSections(content, "SUMMARY", "THREATS", "COUNTRY_RISKS")
+	summary := sections["SUMMARY"]
+	threats := parseBullets(sections["THREATS"])
 
 	// Parse COUNTRY_RISKS  format: Country|score|reason
+	var risks []CountryRisk
 	for _, line := range strings.Split(sections["COUNTRY_RISKS"], "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -727,6 +324,53 @@ func parseBriefResponse(content string) (string, []string, []CountryRisk) {
 	}
 
 	return summary, threats, risks
+}
+
+// parseSections splits an LLM reply into sections that start with a line
+// "HEADER:", returning each section's trimmed body keyed by header
+func parseSections(content string, headers ...string) map[string]string {
+	isHeader := make(map[string]bool, len(headers))
+	for _, h := range headers {
+		isHeader[h+":"] = true
+	}
+
+	sections := map[string]string{}
+	current := ""
+	var buf strings.Builder
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if isHeader[trimmed] {
+			if current != "" {
+				sections[current] = strings.TrimSpace(buf.String())
+			}
+			current = strings.TrimSuffix(trimmed, ":")
+			buf.Reset()
+			continue
+		}
+		if current != "" {
+			buf.WriteString(line + "\n")
+		}
+	}
+	if current != "" {
+		sections[current] = strings.TrimSpace(buf.String())
+	}
+	return sections
+}
+
+// parseBullets returns the non-empty lines of s with any •, - or * prefix removed
+func parseBullets(s string) []string {
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "•")
+		line = strings.TrimPrefix(line, "-")
+		line = strings.TrimPrefix(line, "*")
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 func clamp(v, lo, hi int) int {

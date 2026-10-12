@@ -17,7 +17,12 @@ type cachedBrief struct {
 	Model        string        `json:"model"`
 }
 
-func cacheFilePath() (string, error) {
+const (
+	briefCacheFile      = "brief.json"
+	localBriefCacheFile = "local_brief.json"
+)
+
+func cachePath(name string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -26,63 +31,37 @@ func cacheFilePath() (string, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "brief.json"), nil
+	return filepath.Join(dir, name), nil
 }
 
-// LoadCachedBrief reads the cached brief from disk.
-// Returns nil (no error) if the file doesn't exist or is older than maxAge.
-func LoadCachedBrief(maxAge time.Duration) (*Brief, error) {
-	path, err := cacheFilePath()
+// readCache decodes the named cache file into v. It reports false (and no
+// error) when the file is missing or corrupted, so callers treat both as a miss.
+func readCache(name string, v interface{}) (bool, error) {
+	path, err := cachePath(name)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return nil, nil
+		return false, nil
 	}
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-
-	var cb cachedBrief
-	if err := json.Unmarshal(data, &cb); err != nil {
-		// Corrupted cache — treat as missing
-		return nil, nil
+	if err := json.Unmarshal(data, v); err != nil {
+		return false, nil
 	}
-
-	// Reject if too old
-	if maxAge > 0 && time.Since(cb.GeneratedAt) > maxAge {
-		return nil, nil
-	}
-
-	return &Brief{
-		Summary:      cb.Summary,
-		KeyThreats:   cb.KeyThreats,
-		CountryRisks: cb.CountryRisks,
-		GeneratedAt:  cb.GeneratedAt,
-		Model:        cb.Model,
-	}, nil
+	return true, nil
 }
 
-// SaveCachedBrief writes the brief to disk, silently ignoring errors
+// writeCache writes v to the named cache file, silently ignoring errors
 // (a cache write failure should never crash the app).
-func SaveCachedBrief(b *Brief) {
-	if b == nil {
-		return
-	}
-	path, err := cacheFilePath()
+func writeCache(name string, v interface{}) {
+	path, err := cachePath(name)
 	if err != nil {
 		return
 	}
-	cb := cachedBrief{
-		Summary:      b.Summary,
-		KeyThreats:   b.KeyThreats,
-		CountryRisks: b.CountryRisks,
-		GeneratedAt:  b.GeneratedAt,
-		Model:        b.Model,
-	}
-	data, err := json.MarshalIndent(cb, "", "  ")
+	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return
 	}
@@ -94,9 +73,9 @@ func SaveCachedBrief(b *Brief) {
 	_ = os.Rename(tmp, path)
 }
 
-// ClearBriefCache deletes the cached brief file.
-func ClearBriefCache() error {
-	path, err := cacheFilePath()
+// clearCache deletes the named cache file
+func clearCache(name string) error {
+	path, err := cachePath(name)
 	if err != nil {
 		return err
 	}
@@ -105,6 +84,47 @@ func ClearBriefCache() error {
 		return nil
 	}
 	return err
+}
+
+// expired reports whether a cache entry generated at t is older than maxAge
+func expired(t time.Time, maxAge time.Duration) bool {
+	return maxAge > 0 && time.Since(t) > maxAge
+}
+
+// LoadCachedBrief reads the cached brief from disk.
+// Returns nil (no error) if the file doesn't exist or is older than maxAge.
+func LoadCachedBrief(maxAge time.Duration) (*Brief, error) {
+	var cb cachedBrief
+	ok, err := readCache(briefCacheFile, &cb)
+	if !ok || expired(cb.GeneratedAt, maxAge) {
+		return nil, err
+	}
+	return &Brief{
+		Summary:      cb.Summary,
+		KeyThreats:   cb.KeyThreats,
+		CountryRisks: cb.CountryRisks,
+		GeneratedAt:  cb.GeneratedAt,
+		Model:        cb.Model,
+	}, nil
+}
+
+// SaveCachedBrief writes the brief to disk
+func SaveCachedBrief(b *Brief) {
+	if b == nil {
+		return
+	}
+	writeCache(briefCacheFile, cachedBrief{
+		Summary:      b.Summary,
+		KeyThreats:   b.KeyThreats,
+		CountryRisks: b.CountryRisks,
+		GeneratedAt:  b.GeneratedAt,
+		Model:        b.Model,
+	})
+}
+
+// ClearBriefCache deletes the cached brief file.
+func ClearBriefCache() error {
+	return clearCache(briefCacheFile)
 }
 
 // ─── Local Brief Caching ─────────────────────────────────────────────────────
@@ -116,42 +136,13 @@ type cachedLocalBrief struct {
 	Model       string    `json:"model"`
 }
 
-func localCacheFilePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(home, ".cache", "watchtower")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "local_brief.json"), nil
-}
-
 // LoadCachedLocalBrief reads the cached local brief from disk.
 func LoadCachedLocalBrief(maxAge time.Duration) (*LocalBrief, error) {
-	path, err := localCacheFilePath()
-	if err != nil {
-		return nil, err
-	}
-
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
 	var cb cachedLocalBrief
-	if err := json.Unmarshal(data, &cb); err != nil {
-		return nil, nil
+	ok, err := readCache(localBriefCacheFile, &cb)
+	if !ok || expired(cb.GeneratedAt, maxAge) {
+		return nil, err
 	}
-
-	if maxAge > 0 && time.Since(cb.GeneratedAt) > maxAge {
-		return nil, nil
-	}
-
 	return &LocalBrief{
 		Summary:     cb.Summary,
 		GeneratedAt: cb.GeneratedAt,
@@ -164,35 +155,14 @@ func SaveCachedLocalBrief(b *LocalBrief) {
 	if b == nil {
 		return
 	}
-	path, err := localCacheFilePath()
-	if err != nil {
-		return
-	}
-	cb := cachedLocalBrief{
+	writeCache(localBriefCacheFile, cachedLocalBrief{
 		Summary:     b.Summary,
 		GeneratedAt: b.GeneratedAt,
 		Model:       b.Model,
-	}
-	data, err := json.MarshalIndent(cb, "", "  ")
-	if err != nil {
-		return
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return
-	}
-	_ = os.Rename(tmp, path)
+	})
 }
 
 // ClearLocalBriefCache deletes the cached local brief file.
 func ClearLocalBriefCache() error {
-	path, err := localCacheFilePath()
-	if err != nil {
-		return err
-	}
-	err = os.Remove(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	return err
+	return clearCache(localBriefCacheFile)
 }

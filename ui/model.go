@@ -222,26 +222,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "b":
 			if m.cfg.LLMAPIKey != "" {
 				m.loading["brief"] = true
-				cmds = append(cmds, fetchBrief(intel.LLMConfig{Provider: intel.Provider(m.cfg.LLMProvider), APIKey: m.cfg.LLMAPIKey, Model: m.cfg.LLMModel}, m.globalNews, m.cfg.BriefCacheMins, false))
+				cmds = append(cmds, fetchBrief(m.llmConfig(), m.globalNews, m.cfg.BriefCacheMins, false))
 			}
 		case "B":
 			if m.cfg.LLMAPIKey != "" {
 				m.loading["brief"] = true
 				m.statusMsg = "Forcing fresh brief (ignoring cache)..."
 				m.statusExpiry = time.Now().Add(3 * time.Second)
-				cmds = append(cmds, fetchBrief(intel.LLMConfig{Provider: intel.Provider(m.cfg.LLMProvider), APIKey: m.cfg.LLMAPIKey, Model: m.cfg.LLMModel}, m.globalNews, m.cfg.BriefCacheMins, true))
+				cmds = append(cmds, fetchBrief(m.llmConfig(), m.globalNews, m.cfg.BriefCacheMins, true))
 			}
 		case "i":
 			if m.cfg.LLMAPIKey != "" && m.activeTab == TabLocal {
 				m.loading["localBrief"] = true
-				cmds = append(cmds, fetchLocalBrief(intel.LLMConfig{Provider: intel.Provider(m.cfg.LLMProvider), APIKey: m.cfg.LLMAPIKey, Model: m.cfg.LLMModel}, m.cfg.Location.City, m.localNews, m.weatherCond, m.forecast, m.cfg.BriefCacheMins, false))
+				cmds = append(cmds, fetchLocalBrief(m.llmConfig(), m.cfg.Location.City, m.localNews, m.weatherCond, m.forecast, m.cfg.BriefCacheMins, false))
 			}
 		case "I":
 			if m.cfg.LLMAPIKey != "" && m.activeTab == TabLocal {
 				m.loading["localBrief"] = true
 				m.statusMsg = "Forcing fresh local brief (ignoring cache)..."
 				m.statusExpiry = time.Now().Add(3 * time.Second)
-				cmds = append(cmds, fetchLocalBrief(intel.LLMConfig{Provider: intel.Provider(m.cfg.LLMProvider), APIKey: m.cfg.LLMAPIKey, Model: m.cfg.LLMModel}, m.cfg.Location.City, m.localNews, m.weatherCond, m.forecast, m.cfg.BriefCacheMins, true))
+				cmds = append(cmds, fetchLocalBrief(m.llmConfig(), m.cfg.Location.City, m.localNews, m.weatherCond, m.forecast, m.cfg.BriefCacheMins, true))
 			}
 		case "j", "down":
 			if !m.moveSelection(m.activeTab, 1) {
@@ -310,7 +310,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			delete(m.errors, "global")
 			if m.cfg.LLMAPIKey != "" && m.brief == nil {
 				m.loading["brief"] = true
-				cmds = append(cmds, fetchBrief(intel.LLMConfig{Provider: intel.Provider(m.cfg.LLMProvider), APIKey: m.cfg.LLMAPIKey, Model: m.cfg.LLMModel}, m.globalNews, m.cfg.BriefCacheMins, false))
+				cmds = append(cmds, fetchBrief(m.llmConfig(), m.globalNews, m.cfg.BriefCacheMins, false))
 			}
 		}
 		m.renderListTab(TabNews)
@@ -325,7 +325,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			delete(m.errors, "local")
 			if m.cfg.LLMAPIKey != "" && m.localBrief == nil && m.weatherCond != nil {
 				m.loading["localBrief"] = true
-				cmds = append(cmds, fetchLocalBrief(intel.LLMConfig{Provider: intel.Provider(m.cfg.LLMProvider), APIKey: m.cfg.LLMAPIKey, Model: m.cfg.LLMModel}, m.cfg.Location.City, m.localNews, m.weatherCond, m.forecast, m.cfg.BriefCacheMins, false))
+				cmds = append(cmds, fetchLocalBrief(m.llmConfig(), m.cfg.Location.City, m.localNews, m.weatherCond, m.forecast, m.cfg.BriefCacheMins, false))
 			}
 		}
 		m.renderListTab(TabLocal)
@@ -403,7 +403,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			delete(m.errors, "weather")
 			if m.cfg.LLMAPIKey != "" && m.localBrief == nil && len(m.localNews) > 0 {
 				m.loading["localBrief"] = true
-				cmds = append(cmds, fetchLocalBrief(intel.LLMConfig{Provider: intel.Provider(m.cfg.LLMProvider), APIKey: m.cfg.LLMAPIKey, Model: m.cfg.LLMModel}, m.cfg.Location.City, m.localNews, m.weatherCond, m.forecast, m.cfg.BriefCacheMins, false))
+				cmds = append(cmds, fetchLocalBrief(m.llmConfig(), m.cfg.Location.City, m.localNews, m.weatherCond, m.forecast, m.cfg.BriefCacheMins, false))
 			}
 		}
 		m.renderListTab(TabLocal)
@@ -1384,6 +1384,15 @@ func fetchWeather(lat, lon float64, city string) tea.Cmd {
 	return func() tea.Msg {
 		cond, forecast, err := weather.Fetch(context.Background(), lat, lon, city)
 		return weatherMsg{cond, forecast, err}
+	}
+}
+
+// llmConfig returns the LLM settings from the user's config
+func (m Model) llmConfig() intel.LLMConfig {
+	return intel.LLMConfig{
+		Provider: intel.Provider(m.cfg.LLMProvider),
+		APIKey:   m.cfg.LLMAPIKey,
+		Model:    m.cfg.LLMModel,
 	}
 }
 
