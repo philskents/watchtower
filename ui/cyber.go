@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"watchtower/cyber"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -60,7 +61,11 @@ func (m Model) renderCyberContent() (string, int) {
 		if item.URL != "" {
 			urlIndicator = StyleMuted.Render("  ↗")
 		}
-		line1 := fmt.Sprintf("%s %s  %s  %s%s", badge, source, category, age, urlIndicator)
+		watch := ""
+		if term := m.cyberWatch[i]; term != "" {
+			watch = "  " + StyleWatch.Render("★ "+term)
+		}
+		line1 := fmt.Sprintf("%s %s  %s%s  %s%s", badge, source, category, watch, age, urlIndicator)
 		title := truncate(item.Title, titleW)
 
 		if i == m.sel[TabCyber].idx {
@@ -146,7 +151,11 @@ func (m Model) renderThreatIntelPanel(w int) string {
 	sb.WriteString(StyleBriefMeta.Render(meta) + "\n\n")
 
 	sb.WriteString(StyleSubSectionHeader.Render(
-		fmt.Sprintf(" KNOWN EXPLOITED · ADDED LAST %d DAYS  (%d)", int(kevWindow.Hours()/24), len(in.KEV))) + "\n")
+		fmt.Sprintf(" KNOWN EXPLOITED · ADDED LAST %d DAYS  (%d)", int(kevWindow.Hours()/24), len(in.KEV))))
+	if n := watchedKEV(in.KEV); n > 0 {
+		sb.WriteString(StyleWatch.Render(fmt.Sprintf("  ★ %d on watchlist", n)))
+	}
+	sb.WriteString("\n")
 	if len(in.KEV) == 0 {
 		sb.WriteString(StyleMuted.Render("  None added in this window.") + "\n\n")
 		return sb.String()
@@ -172,6 +181,11 @@ func (m Model) renderThreatIntelPanel(w int) string {
 			break
 		}
 		product := padRight(truncate(e.Vendor+" "+e.Product, productW), productW)
+		gutter := "  "
+		if e.Watch != "" {
+			gutter = StyleWatch.Render("★") + " "
+			product = StyleWatch.Render(product)
+		}
 
 		epss := StyleMuted.Render(fmt.Sprintf("%*s", epssW, "—"))
 		if e.EPSS >= 0 {
@@ -193,13 +207,24 @@ func (m Model) renderThreatIntelPanel(w int) string {
 			flag = StyleCritical.Render("RANSOM")
 		}
 
-		sb.WriteString(fmt.Sprintf("  %s %s %s %s %s %s\n",
+		sb.WriteString(fmt.Sprintf("%s%s %s %s %s %s %s\n", gutter,
 			StyleAge.Render(e.DateAdded.Format("Jan 02")),
 			StyleSymbol.Render(fmt.Sprintf("%-*s", cveW, e.CVE)),
 			product, epss, due, flag))
 	}
 	sb.WriteString("\n")
 	return sb.String()
+}
+
+// watchedKEV counts the entries that match the watchlist
+func watchedKEV(entries []cyber.KEVEntry) int {
+	n := 0
+	for _, e := range entries {
+		if e.Watch != "" {
+			n++
+		}
+	}
+	return n
 }
 
 // infoconBadge renders the SANS ISC Infocon level as a colored badge

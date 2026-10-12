@@ -107,6 +107,11 @@ var (
 	StyleWarning = lipgloss.NewStyle().
 			Foreground(colorYellow)
 
+	// StyleWatch marks items that match the user's cyber watchlist
+	StyleWatch = lipgloss.NewStyle().
+			Foreground(colorYellow).
+			Bold(true)
+
 	StyleSpinner = lipgloss.NewStyle().
 			Foreground(colorAccent)
 

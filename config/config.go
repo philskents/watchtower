@@ -24,6 +24,7 @@ type Config struct {
 	RefreshSec     int      `mapstructure:"refresh_seconds"`
 	CryptoPairs    []string `mapstructure:"crypto_pairs"`
 	BriefCacheMins int      `mapstructure:"brief_cache_minutes"`
+	CyberWatchlist []string `mapstructure:"cyber_watchlist"` // vendors/products to highlight on the Cyber tab
 }
 
 type Location struct {
@@ -117,6 +118,9 @@ func Save(cfg *Config) error {
 	v.Set("refresh_seconds", cfg.RefreshSec)
 	v.Set("crypto_pairs", cfg.CryptoPairs)
 	v.Set("brief_cache_minutes", cfg.BriefCacheMins)
+	if len(cfg.CyberWatchlist) > 0 {
+		v.Set("cyber_watchlist", cfg.CyberWatchlist)
+	}
 
 	if err := v.WriteConfig(); err != nil {
 		return fmt.Errorf("writing config: %w", err)

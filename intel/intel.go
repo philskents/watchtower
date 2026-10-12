@@ -313,6 +313,9 @@ func GenerateCyberBrief(ctx context.Context, cfg LLMConfig, in *cyber.Intel, ite
 			if e.Ransomware {
 				ransom = ", used by ransomware"
 			}
+			if e.Watch != "" {
+				ransom += ", ON THE READER'S WATCHLIST"
+			}
 			sb.WriteString(fmt.Sprintf("- %s %s %s: %s (added %s, EPSS %s%s, federal patch deadline %s)\n",
 				e.CVE, e.Vendor, e.Product, e.Name, e.DateAdded.Format("Jan 02"),
 				epss, ransom, e.DueDate.Format("Jan 02")))

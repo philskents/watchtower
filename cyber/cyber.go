@@ -38,6 +38,7 @@ type KEVEntry struct {
 	Ransomware  bool    // CISA knows of ransomware campaigns using it
 	EPSS        float64 // probability of exploitation in the next 30 days, 0–1; -1 if unknown
 	Percentile  float64 // EPSS percentile, 0–1; -1 if unknown
+	Watch       string  // the watchlist term this entry matches; "" if none
 }
 
 // URL links to the NVD entry for the CVE
@@ -55,14 +56,19 @@ type Intel struct {
 }
 
 // FetchIntel fetches KEV entries added within window, enriched with EPSS
-// scores, plus the Infocon level. KEV is required; EPSS and Infocon are
-// best-effort and leave their fields unset on failure.
-func FetchIntel(ctx context.Context, window time.Duration) (*Intel, error) {
+// scores and marked when they match watch, plus the Infocon level. KEV is
+// required; EPSS and Infocon are best-effort and leave their fields unset
+// on failure.
+func FetchIntel(ctx context.Context, window time.Duration, watch *Watchlist) (*Intel, error) {
 	var catalog kevCatalog
 	if err := getJSON(ctx, kevURL, &catalog); err != nil {
 		return nil, fmt.Errorf("kev: %w", err)
 	}
 	entries := catalog.recent(time.Now().Add(-window))
+	for i := range entries {
+		e := &entries[i]
+		e.Watch = watch.Match(e.Vendor + " " + e.Product + " " + e.Name)
+	}
 
 	if scores, err := fetchEPSS(ctx, cveIDs(entries)); err == nil {
 		for i := range entries {

@@ -113,6 +113,8 @@ type Model struct {
 	cyberNews    []feeds.NewsItem
 	cyberIntel   *cyber.Intel
 	cyberBrief   *intel.CyberBrief
+	cyberWatch   map[int]string // cyberNews index → matching watchlist term
+	watchlist    *cyber.Watchlist
 
 	// Article selection per list tab (for browser open)
 	sel          [tabCount]listSelection
@@ -146,6 +148,7 @@ func NewModel(cfg *config.Config) Model {
 		spinner:   sp,
 		viewports: vps,
 		activeTab: TabOverview,
+		watchlist: cyber.NewWatchlist(cfg.CyberWatchlist),
 	}
 }
 
@@ -157,7 +160,7 @@ func (m Model) Init() tea.Cmd {
 		loadCachedBrief(m.cfg),
 		loadCachedLocalBrief(m.cfg),
 		loadCachedCyberBrief(m.cfg),
-		fetchCyberIntel(),
+		fetchCyberIntel(m.watchlist),
 		tickCyber(),
 	)
 }
@@ -225,7 +228,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activeTab = TabCyber
 		case "r":
 			m.lastRefresh = time.Time{}
-			cmds = append(cmds, doRefreshAll(m.cfg), fetchCyberIntel())
+			cmds = append(cmds, doRefreshAll(m.cfg), fetchCyberIntel(m.watchlist))
 		case "b":
 			if m.cfg.LLMAPIKey != "" {
 				m.loading["brief"] = true
@@ -354,6 +357,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errors["cyberNews"] = msg.err.Error()
 		} else {
 			m.cyberNews = msg.items
+			m.cyberWatch = map[int]string{}
+			for i, item := range msg.items {
+				if term := m.watchlist.Match(item.Title); term != "" {
+					m.cyberWatch[i] = term
+				}
+			}
 			delete(m.errors, "cyberNews")
 		}
 		cmds = append(cmds, m.autoCyberBrief())
@@ -371,7 +380,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.renderListTab(TabCyber)
 
 	case cyberTickMsg:
-		cmds = append(cmds, fetchCyberIntel(), tickCyber())
+		cmds = append(cmds, fetchCyberIntel(m.watchlist), tickCyber())
 
 	case cryptoMsg:
 		delete(m.loading, "crypto")
@@ -1358,9 +1367,9 @@ func fetchCyberNews() tea.Cmd {
 	}
 }
 
-func fetchCyberIntel() tea.Cmd {
+func fetchCyberIntel(watch *cyber.Watchlist) tea.Cmd {
 	return func() tea.Msg {
-		in, err := cyber.FetchIntel(context.Background(), kevWindow)
+		in, err := cyber.FetchIntel(context.Background(), kevWindow, watch)
 		return cyberIntelMsg{in, err}
 	}
 }
@@ -1482,7 +1491,7 @@ func loadCachedLocalBrief(cfg *config.Config) tea.Cmd {
 
 // fetchCyberBrief generates the cyber brief, using the disk cache unless forceRefresh is true
 func (m Model) fetchCyberBrief(forceRefresh bool) tea.Cmd {
-	cfg, in, items := m.llmConfig(), m.cyberIntel, m.cyberNews
+	cfg, in, items, watchlist := m.llmConfig(), m.cyberIntel, m.cyberNews, m.cfg.CyberWatchlist
 	cacheMins := m.cfg.BriefCacheMins
 	return func() tea.Msg {
 		if !forceRefresh && cacheMins > 0 {
@@ -1491,7 +1500,7 @@ func (m Model) fetchCyberBrief(forceRefresh bool) tea.Cmd {
 				return cyberBriefMsg{brief: cached, fromCache: true}
 			}
 		}
-		b, err := intel.GenerateCyberBrief(context.Background(), cfg, in, items, nil)
+		b, err := intel.GenerateCyberBrief(context.Background(), cfg, in, items, watchlist)
 		return cyberBriefMsg{brief: b, err: err}
 	}
 }
