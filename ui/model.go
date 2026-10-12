@@ -903,9 +903,7 @@ func (m Model) renderCryptoPanel(w, h int) string {
 				chIcon = "▼"
 			}
 			name := p.Name
-			if len(name) > nameW {
-				name = name[:nameW-1] + "…"
-			}
+			name = truncate(name, nameW)
 			row := fmt.Sprintf("%-*s %-*s %*s ",
 				symW, StyleSymbol.Render(p.Symbol),
 				nameW, name,
@@ -936,9 +934,7 @@ func (m Model) renderCryptoPanel(w, h int) string {
 				chIcon = "▼"
 			}
 			name := idx.Name
-			if len(name) > nameW {
-				name = name[:nameW-1] + "…"
-			}
+			name = truncate(name, nameW)
 			sb.WriteString(fmt.Sprintf("%-*s %11s %s\n",
 				nameW, name,
 				markets.FormatPrice(idx.Price),
@@ -968,9 +964,7 @@ func (m Model) renderCryptoPanel(w, h int) string {
 				chIcon = "▼"
 			}
 			name := c.Name
-			if len(name) > nameW {
-				name = name[:nameW-1] + "…"
-			}
+			name = truncate(name, nameW)
 			unitStr := StyleMuted.Render(fmt.Sprintf("%-6s", c.Unit))
 			sb.WriteString(fmt.Sprintf("%-*s %9s %s %s\n",
 				nameW, name,
@@ -1020,16 +1014,13 @@ func (m Model) renderPolyPanel(w, h int) string {
 		case pct <= 33:
 			pctStyle = StyleNegative
 		}
-		title := pm.Title
-		if len(title) > titleW {
-			title = title[:titleW-3] + "..."
-		}
+		title := padRight(truncate(pm.Title, titleW), titleW)
 		endDate := pm.EndDate
 		if len(endDate) >= 10 {
 			endDate = endDate[5:10] // MM-DD
 		}
-		sb.WriteString(fmt.Sprintf("%-*s %s  %5s\n",
-			titleW, title,
+		sb.WriteString(fmt.Sprintf("%s %s  %5s\n",
+			title,
 			pctStyle.Render(fmt.Sprintf("%5.1f%%", pct)),
 			endDate,
 		))
@@ -1089,11 +1080,7 @@ func (m Model) renderNewsContent() (string, int) {
 		age := StyleAge.Render(formatAge(item.Published))
 
 		// Truncate title to fit exactly one line
-		titleLine := item.Title
-		if len(titleLine) > titleW {
-			runes := []rune(titleLine)
-			titleLine = string(runes[:titleW-1]) + "…"
-		}
+		titleLine := truncate(item.Title, titleW)
 		urlIndicator := ""
 		if item.URL != "" {
 			urlIndicator = StyleMuted.Render("  ↗")
@@ -1646,11 +1633,22 @@ func maxInt(a, b int) int {
 	return b
 }
 
+// truncate shortens s to at most n characters (not bytes), ending in "…"
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n || n < 1 {
 		return s
 	}
-	return s[:n-1] + "…"
+	return string(r[:n-1]) + "…"
+}
+
+// padRight pads s with spaces to n characters; fmt's %-*s pads by bytes,
+// which misaligns columns containing accented characters
+func padRight(s string, n int) string {
+	if pad := n - len([]rune(s)); pad > 0 {
+		return s + strings.Repeat(" ", pad)
+	}
+	return s
 }
 
 func (m Model) formatTemp(celsius float64) string {
