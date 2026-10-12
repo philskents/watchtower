@@ -700,33 +700,46 @@ func (m Model) renderOverviewContent() string {
 
 	// Available inner width (minus outer pane border+padding = 4)
 	innerW := m.width - 4
-	halfW := innerW / 2
+	// Each quadrant renders at boxW+2 (border); two of them plus a 1-col gap must fit innerW
+	boxW := (innerW-1)/2 - 2
 
 	// Available inner height
 	contentH := m.height - 6
 	if contentH < 10 {
 		contentH = 10
 	}
-	// Top row gets ~40% of height, bottom row gets ~55% (crypto panel needs more space)
-	topH := (contentH * 4) / 10
-	botH := contentH - topH - 3 // 3 = gap line + borders
-	if topH < 8 {
-		topH = 8
+	// Each quadrant renders at h+3 rows (title + top/bottom border); rows are separated by a gap line
+	avail := contentH - 7
+	// Top row gets ~40% of height, bottom row the rest (crypto panel needs more space)
+	topH := (avail * 4) / 10
+	botH := avail - topH
+	if topH < 6 {
+		topH = 6
 	}
-	if botH < 8 {
-		botH = 8
+	if botH < 6 {
+		botH = 6
 	}
-	topQH := topH - 2
-	botQH := botH - 2
+	topQH := topH
+	botQH := botH
 
-	// Quadrant inner content width
-	qW := halfW - 3
+	// Quadrant inner content width (minus horizontal padding)
+	qW := boxW - 2
 
 	// Render the four panels
-	topLeft := m.quadrantBox("🌤  WEATHER  "+m.cfg.Location.City, m.renderWeatherPanel(qW, topQH), halfW-1, topH)
-	topRight := m.quadrantBox("🧠  INTEL BRIEF", m.renderBriefPanel(qW, topQH), halfW-1, topH)
-	botLeft := m.quadrantBox("₿  MARKETS & PRICES", m.renderCryptoPanel(qW, botQH), halfW-1, botH)
-	botRight := m.quadrantBox("📊  PREDICTION MARKETS", m.renderPolyPanel(qW, botQH), halfW-1, botH)
+	weather := m.renderWeatherPanel(qW, topQH)
+	brief := m.renderBriefPanel(qW, topQH)
+	crypto := m.renderCryptoPanel(qW, botQH)
+	poly := m.renderPolyPanel(qW, botQH)
+
+	// If a panel overflows its budget, grow both boxes in that row so they stay
+	// level; the overview viewport then scrolls (↑↓/jk) to reveal the rest.
+	topH = maxInt(topH, maxInt(contentLines(weather), contentLines(brief)))
+	botH = maxInt(botH, maxInt(contentLines(crypto), contentLines(poly)))
+
+	topLeft := m.quadrantBox("🌤️  WEATHER  "+m.cfg.Location.City, weather, boxW, topH)
+	topRight := m.quadrantBox("🧠  INTEL BRIEF", brief, boxW, topH)
+	botLeft := m.quadrantBox("₿  MARKETS & PRICES", crypto, boxW, botH)
+	botRight := m.quadrantBox("📊  PREDICTION MARKETS", poly, boxW, botH)
 
 	topRow := lipgloss.JoinHorizontal(lipgloss.Top, topLeft, " ", topRight)
 	botRow := lipgloss.JoinHorizontal(lipgloss.Top, botLeft, " ", botRight)
@@ -734,9 +747,15 @@ func (m Model) renderOverviewContent() string {
 	return lipgloss.JoinVertical(lipgloss.Left, topRow, "", botRow)
 }
 
+// contentLines counts rendered lines, ignoring trailing newlines
+func contentLines(s string) int {
+	return strings.Count(strings.TrimRight(s, "\n"), "\n") + 1
+}
+
 // quadrantBox wraps content in a rounded border with a colored title bar
 func (m Model) quadrantBox(title, content string, w, h int) string {
 	titleLine := StyleQuadrantTitle.Width(w).Render(title)
+	content = strings.TrimRight(content, "\n")
 	body := StyleQuadrantPane.Width(w).Height(h).Render(content)
 	return lipgloss.JoinVertical(lipgloss.Left, titleLine, body)
 }
@@ -759,8 +778,8 @@ func (m Model) renderWeatherPanel(w, h int) string {
 		StyleWeatherTemp.Render(m.formatTemp(wc.TempC))))
 	sb.WriteString(StyleWeatherDesc.Render(wc.Description) + "\n")
 	sb.WriteString(StyleAge.Render(fmt.Sprintf("Feels like %s", m.formatTemp(wc.FeelsLikeC))) + "\n\n")
-	sb.WriteString(fmt.Sprintf("💧 %d%%   💨 %.0f km/h %s   ☀ UV %.0f\n",
-		wc.Humidity, wc.WindSpeedKmh,
+	sb.WriteString(fmt.Sprintf("💧 %d%%   💨 %s %s   ☀️ UV %.0f\n",
+		wc.Humidity, m.formatWind(wc.WindSpeedKmh),
 		weather.WindDirectionStr(wc.WindDirection), wc.UVIndex))
 
 	// Compact forecast — as many rows as fit
@@ -781,8 +800,8 @@ func (m Model) renderWeatherPanel(w, h int) string {
 			if i == 0 {
 				dayLabel = "Today     "
 			}
-			sb.WriteString(fmt.Sprintf("%-10s  %s  %4s %4s %3.0fmm\n",
-				dayLabel, f.Icon, m.formatTemp(f.MaxTempC), m.formatTemp(f.MinTempC), f.RainMM))
+			sb.WriteString(fmt.Sprintf("%-10s  %s  %4s %4s %6s\n",
+				dayLabel, f.Icon, m.formatTemp(f.MaxTempC), m.formatTemp(f.MinTempC), m.formatRain(f.RainMM)))
 		}
 	}
 
@@ -905,7 +924,7 @@ func (m Model) renderCryptoPanel(w, h int) string {
 	} else if len(m.stockIndices) == 0 {
 		sb.WriteString(StyleMuted.Render("  "+m.spinner.View()+" fetching...") + "\n")
 	} else {
-		nameW := w - 14
+		nameW := w - 20 // name + " " + 11 price + " " + 7 change
 		if nameW < 6 {
 			nameW = 6
 		}
@@ -937,7 +956,7 @@ func (m Model) renderCryptoPanel(w, h int) string {
 	} else if len(m.commodities) == 0 {
 		sb.WriteString(StyleMuted.Render("  "+m.spinner.View()+" fetching...") + "\n")
 	} else {
-		nameW := w - 22
+		nameW := w - 25 // name + " " + 9 price + " " + 6 unit + " " + 7 change
 		if nameW < 6 {
 			nameW = 6
 		}
@@ -962,7 +981,7 @@ func (m Model) renderCryptoPanel(w, h int) string {
 		}
 	}
 
-	return StyleQuadrantPane.Width(w).Height(h).Render(sb.String())
+	return sb.String()
 }
 
 func (m Model) renderPolyPanel(w, h int) string {
@@ -1098,7 +1117,7 @@ func (m Model) renderNewsContent() (string, int) {
 
 func (m Model) renderCountryRiskPanel(w int) (string, int) {
 	var sb strings.Builder
-	sb.WriteString(StyleBriefTitle.Render("🌡  COUNTRY RISK INDEX") + "\n")
+	sb.WriteString(StyleBriefTitle.Render("🌡️  COUNTRY RISK INDEX") + "\n")
 	sb.WriteString(StyleDivider.Render(strings.Repeat("─", minInt(w, 120))) + "\n")
 
 	if m.brief == nil || len(m.brief.CountryRisks) == 0 {
@@ -1292,18 +1311,18 @@ func (m Model) renderLocalContent() (string, int) {
 		weatherBlock += StyleSectionHeader.Render(" WEATHER  "+wc.City) + "\n\n"
 		weatherBlock += fmt.Sprintf("  %s  %s  %s  (feels like %s)\n",
 			wc.Icon, wc.Description, m.formatTemp(wc.TempC), m.formatTemp(wc.FeelsLikeC))
-		weatherBlock += fmt.Sprintf("  💧 Humidity: %d%%   💨 Wind: %.0f km/h %s   👁 Visibility: %.0f km   ☀ UV: %.0f\n\n",
-			wc.Humidity, wc.WindSpeedKmh,
+		weatherBlock += fmt.Sprintf("  💧 Humidity: %d%%   💨 Wind: %s %s   👁️ Visibility: %s   ☀️ UV: %.0f\n\n",
+			wc.Humidity, m.formatWind(wc.WindSpeedKmh),
 			weather.WindDirectionStr(wc.WindDirection),
-			wc.Visibility/1000, wc.UVIndex)
+			m.formatDistance(wc.Visibility), wc.UVIndex)
 		if len(m.forecast) > 0 {
 			weatherBlock += StyleTableHeader.Render(
 				fmt.Sprintf("  %-12s %-16s %8s %8s %10s", "DATE", "CONDITION", "MAX", "MIN", "RAIN")) + "\n"
 			weatherBlock += StyleDivider.Render(strings.Repeat("─", 60)) + "\n"
 			for _, f := range m.forecast {
-				weatherBlock += fmt.Sprintf("  %-12s %s %-12s %6s %6s %7.1fmm\n",
+				weatherBlock += fmt.Sprintf("  %-12s %s %-12s %6s %6s %9s\n",
 					f.Date.Format("Mon Jan 02"), f.Icon, f.Desc,
-					m.formatTemp(f.MaxTempC), m.formatTemp(f.MinTempC), f.RainMM)
+					m.formatTemp(f.MaxTempC), m.formatTemp(f.MinTempC), m.formatRain(f.RainMM))
 			}
 			weatherBlock += "\n"
 		}
@@ -1641,6 +1660,33 @@ func (m Model) formatTemp(celsius float64) string {
 		unit = "F"
 	}
 	return fmt.Sprintf("%.1f°%s", celsius, unit)
+}
+
+// imperial reports whether wind, visibility and rain should use US units;
+// it follows the temperature setting so one choice covers the whole display.
+func (m Model) imperial() bool {
+	return m.cfg.TempUnit == "fahrenheit"
+}
+
+func (m Model) formatWind(kmh float64) string {
+	if m.imperial() {
+		return fmt.Sprintf("%.0f mph", kmh*0.621371)
+	}
+	return fmt.Sprintf("%.0f km/h", kmh)
+}
+
+func (m Model) formatDistance(meters float64) string {
+	if m.imperial() {
+		return fmt.Sprintf("%.0f mi", meters/1609.344)
+	}
+	return fmt.Sprintf("%.0f km", meters/1000)
+}
+
+func (m Model) formatRain(mm float64) string {
+	if m.imperial() {
+		return fmt.Sprintf("%.2fin", mm/25.4)
+	}
+	return fmt.Sprintf("%.0fmm", mm)
 }
 
 // isCommandAvailable checks if a command exists on PATH
