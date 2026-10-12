@@ -968,7 +968,7 @@ func (m Model) renderNewsContent() (string, int) {
 		titleLine := truncate(item.Title, titleW)
 		urlIndicator := ""
 		if item.URL != "" {
-			urlIndicator = StyleMuted.Render("  ↗")
+			urlIndicator = StyleMuted.Render("  →")
 		}
 
 		if i == m.sel[TabNews].idx {
@@ -1236,7 +1236,7 @@ func (m Model) renderLocalContent() (string, int) {
 			age := StyleAge.Render(formatAge(item.Published))
 			urlIndicator := ""
 			if item.URL != "" {
-				urlIndicator = StyleMuted.Render("  ↗")
+				urlIndicator = StyleMuted.Render("  →")
 			}
 
 			if i == m.sel[TabLocal].idx {

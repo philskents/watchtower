@@ -59,7 +59,7 @@ func (m Model) renderCyberContent() (string, int) {
 		age := StyleAge.Render(formatAge(item.Published))
 		urlIndicator := ""
 		if item.URL != "" {
-			urlIndicator = StyleMuted.Render("  ↗")
+			urlIndicator = StyleMuted.Render("  →")
 		}
 		watch := ""
 		if term := m.cyberWatch[i]; term != "" {
