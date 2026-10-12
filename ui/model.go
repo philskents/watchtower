@@ -78,6 +78,11 @@ type (
 		err       error
 		fromCache bool
 	}
+	cyberBriefMsg struct {
+		brief     *intel.CyberBrief
+		err       error
+		fromCache bool
+	}
 	tickMsg time.Time
 )
 
@@ -107,6 +112,7 @@ type Model struct {
 	localBrief   *intel.LocalBrief
 	cyberNews    []feeds.NewsItem
 	cyberIntel   *cyber.Intel
+	cyberBrief   *intel.CyberBrief
 
 	// Article selection per list tab (for browser open)
 	sel          [tabCount]listSelection
@@ -150,6 +156,7 @@ func (m Model) Init() tea.Cmd {
 		tickEvery(time.Duration(m.cfg.RefreshSec)*time.Second),
 		loadCachedBrief(m.cfg),
 		loadCachedLocalBrief(m.cfg),
+		loadCachedCyberBrief(m.cfg),
 		fetchCyberIntel(),
 		tickCyber(),
 	)
@@ -231,17 +238,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusExpiry = time.Now().Add(3 * time.Second)
 				cmds = append(cmds, fetchBrief(m.llmConfig(), m.globalNews, m.cfg.BriefCacheMins, true))
 			}
-		case "i":
-			if m.cfg.LLMAPIKey != "" && m.activeTab == TabLocal {
-				m.loading["localBrief"] = true
-				cmds = append(cmds, fetchLocalBrief(m.llmConfig(), m.cfg.Location.City, m.localNews, m.weatherCond, m.forecast, m.cfg.BriefCacheMins, false))
+		case "i", "I":
+			// The brief for the current tab; I skips the cache
+			force := msg.String() == "I"
+			if m.cfg.LLMAPIKey == "" {
+				break
 			}
-		case "I":
-			if m.cfg.LLMAPIKey != "" && m.activeTab == TabLocal {
+			switch m.activeTab {
+			case TabLocal:
 				m.loading["localBrief"] = true
-				m.statusMsg = "Forcing fresh local brief (ignoring cache)..."
-				m.statusExpiry = time.Now().Add(3 * time.Second)
-				cmds = append(cmds, fetchLocalBrief(m.llmConfig(), m.cfg.Location.City, m.localNews, m.weatherCond, m.forecast, m.cfg.BriefCacheMins, true))
+				if force {
+					m.statusMsg = "Forcing fresh local brief (ignoring cache)..."
+					m.statusExpiry = time.Now().Add(3 * time.Second)
+				}
+				cmds = append(cmds, fetchLocalBrief(m.llmConfig(), m.cfg.Location.City, m.localNews, m.weatherCond, m.forecast, m.cfg.BriefCacheMins, force))
+			case TabCyber:
+				m.loading["cyberBrief"] = true
+				if force {
+					m.statusMsg = "Forcing fresh cyber brief (ignoring cache)..."
+					m.statusExpiry = time.Now().Add(3 * time.Second)
+				}
+				cmds = append(cmds, m.fetchCyberBrief(force))
+				m.renderListTab(TabCyber)
 			}
 		case "j", "down":
 			if !m.moveSelection(m.activeTab, 1) {
@@ -338,6 +356,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cyberNews = msg.items
 			delete(m.errors, "cyberNews")
 		}
+		cmds = append(cmds, m.autoCyberBrief())
 		m.renderListTab(TabCyber)
 
 	case cyberIntelMsg:
@@ -348,6 +367,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cyberIntel = msg.intel
 			delete(m.errors, "cyberIntel")
 		}
+		cmds = append(cmds, m.autoCyberBrief())
 		m.renderListTab(TabCyber)
 
 	case cyberTickMsg:
@@ -448,6 +468,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.renderListTab(TabLocal)
 
+	case cyberBriefMsg:
+		delete(m.loading, "cyberBrief")
+		if msg.err != nil {
+			m.errors["cyberBrief"] = msg.err.Error()
+		} else {
+			m.cyberBrief = msg.brief
+			delete(m.errors, "cyberBrief")
+			if msg.fromCache {
+				m.statusMsg = "Cyber brief loaded from cache (" + msg.brief.GeneratedAt.Format("Jan 02 15:04") + ")"
+			} else {
+				go intel.SaveCachedCyberBrief(msg.brief)
+				m.statusMsg = "Cyber brief generated and cached"
+			}
+			m.statusExpiry = time.Now().Add(4 * time.Second)
+		}
+		m.renderListTab(TabCyber)
+
 	case openURLMsg:
 		// No-op — the Cmd already ran xdg-open/open; nothing to update
 		_ = msg
@@ -531,7 +568,7 @@ func (m Model) renderFooter() string {
 	case TabLocal:
 		hint = "  jk navigate  enter open in browser  d/u page  g/G top/bottom  tab switch  r refresh  i local brief  q quit"
 	case TabCyber:
-		hint = "  jk navigate  enter open in browser  d/u page  g/G top/bottom  tab switch  r refresh  q quit"
+		hint = "  jk navigate  enter open in browser  d/u page  g/G top/bottom  tab switch  r refresh  i cyber brief  q quit"
 	default:
 		hint = "  ↑↓/jk scroll  tab/←→ switch  1 overview  2 news  3 local  4 cyber  r refresh  b brief  q quit"
 	}
@@ -687,16 +724,7 @@ func (m Model) renderBriefPanel(w, h int) string {
 	}
 
 	b := m.brief
-	cacheAge := ""
-	if time.Since(b.GeneratedAt) > time.Minute {
-		mins := int(time.Since(b.GeneratedAt).Minutes())
-		if mins >= 60 {
-			cacheAge = fmt.Sprintf("  cached %dh%dm ago", mins/60, mins%60)
-		} else {
-			cacheAge = fmt.Sprintf("  cached %dm ago", mins)
-		}
-	}
-	sb.WriteString(StyleBriefMeta.Render(b.GeneratedAt.Format("15:04")+"  "+b.Model+cacheAge) + "\n\n")
+	sb.WriteString(StyleBriefMeta.Render(b.GeneratedAt.Format("15:04")+"  "+b.Model+cacheAgeLabel(b.GeneratedAt)) + "\n\n")
 
 	// Word-wrapped summary
 	wrapped := wordWrap(b.Summary, w-2)
@@ -1117,16 +1145,7 @@ func (m Model) renderLocalBriefPanel(w int) string {
 	}
 
 	b := m.localBrief
-	cacheAge := ""
-	if time.Since(b.GeneratedAt) > time.Minute {
-		mins := int(time.Since(b.GeneratedAt).Minutes())
-		if mins >= 60 {
-			cacheAge = fmt.Sprintf("  (cached %dh%dm ago)", mins/60, mins%60)
-		} else {
-			cacheAge = fmt.Sprintf("  (cached %dm ago)", mins)
-		}
-	}
-	sb.WriteString(StyleBriefMeta.Render(b.GeneratedAt.Format("15:04")+"  "+b.Model+cacheAge) + "\n\n")
+	sb.WriteString(StyleBriefMeta.Render(b.GeneratedAt.Format("15:04")+"  "+b.Model+cacheAgeLabel(b.GeneratedAt)) + "\n\n")
 
 	wrapped := wordWrap(b.Summary, w-2)
 	for _, line := range strings.Split(wrapped, "\n") {
@@ -1459,6 +1478,61 @@ func loadCachedLocalBrief(cfg *config.Config) tea.Cmd {
 		}
 		return localBriefMsg{brief: cached, fromCache: true}
 	}
+}
+
+// fetchCyberBrief generates the cyber brief, using the disk cache unless forceRefresh is true
+func (m Model) fetchCyberBrief(forceRefresh bool) tea.Cmd {
+	cfg, in, items := m.llmConfig(), m.cyberIntel, m.cyberNews
+	cacheMins := m.cfg.BriefCacheMins
+	return func() tea.Msg {
+		if !forceRefresh && cacheMins > 0 {
+			cached, err := intel.LoadCachedCyberBrief(time.Duration(cacheMins) * time.Minute)
+			if err == nil && cached != nil {
+				return cyberBriefMsg{brief: cached, fromCache: true}
+			}
+		}
+		b, err := intel.GenerateCyberBrief(context.Background(), cfg, in, items, nil)
+		return cyberBriefMsg{brief: b, err: err}
+	}
+}
+
+// autoCyberBrief generates the cyber brief once both KEV intel and cyber news
+// have loaded, if there's no brief yet
+func (m Model) autoCyberBrief() tea.Cmd {
+	if m.cfg.LLMAPIKey == "" || m.cyberBrief != nil || m.loading["cyberBrief"] ||
+		m.cyberIntel == nil || m.cyberNews == nil {
+		return nil
+	}
+	m.loading["cyberBrief"] = true
+	return m.fetchCyberBrief(false)
+}
+
+// loadCachedCyberBrief is fired on Init to immediately populate the cyber brief
+// from disk if a valid cache exists
+func loadCachedCyberBrief(cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		if cfg.BriefCacheMins == 0 {
+			return nil
+		}
+		cached, err := intel.LoadCachedCyberBrief(time.Duration(cfg.BriefCacheMins) * time.Minute)
+		if err != nil || cached == nil {
+			return nil
+		}
+		return cyberBriefMsg{brief: cached, fromCache: true}
+	}
+}
+
+// cacheAgeLabel describes how long ago a cached brief was generated, or ""
+// if it's fresh
+func cacheAgeLabel(t time.Time) string {
+	mins := int(time.Since(t).Minutes())
+	switch {
+	case mins < 1:
+		return ""
+	case mins >= 60:
+		return fmt.Sprintf("  cached %dh%dm ago", mins/60, mins%60)
+	}
+	return fmt.Sprintf("  cached %dm ago", mins)
 }
 
 // ─── Tea commands (continued) ────────────────────────────────────────────────

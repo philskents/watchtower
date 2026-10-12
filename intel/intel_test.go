@@ -65,3 +65,27 @@ func TestErrorMessage(t *testing.T) {
 		}
 	}
 }
+
+func TestParseCyberBriefResponse(t *testing.T) {
+	reply := `SUMMARY:
+Attackers are exploiting a Fortinet flaw.
+Ransomware crews are active.
+
+PRIORITIES:
+• Patch CVE-2026-1234 on FortiGate
+- Check Exchange logs
+* Rotate VPN credentials
+`
+	summary, priorities := parseCyberBriefResponse(reply)
+	if want := "Attackers are exploiting a Fortinet flaw. Ransomware crews are active."; summary != want {
+		t.Errorf("summary = %q, want %q", summary, want)
+	}
+	want := []string{"Patch CVE-2026-1234 on FortiGate", "Check Exchange logs", "Rotate VPN credentials"}
+	if !reflect.DeepEqual(priorities, want) {
+		t.Errorf("priorities = %q, want %q", priorities, want)
+	}
+
+	if summary, _ := parseCyberBriefResponse("Just prose."); summary != "Just prose." {
+		t.Errorf("unformatted reply summary = %q", summary)
+	}
+}

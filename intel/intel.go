@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"watchtower/cyber"
 	"watchtower/feeds"
 	"watchtower/weather"
 )
@@ -118,6 +119,14 @@ type Brief struct {
 // LocalBrief holds an AI-generated summary of local news and weather
 type LocalBrief struct {
 	Summary     string
+	GeneratedAt time.Time
+	Model       string
+}
+
+// CyberBrief holds an AI-generated summary of the cyber threat picture
+type CyberBrief struct {
+	Summary     string
+	Priorities  []string // things to act on, most urgent first
 	GeneratedAt time.Time
 	Model       string
 }
@@ -267,6 +276,111 @@ DATA:
 		GeneratedAt: time.Now(),
 		Model:       model,
 	}, nil
+}
+
+// GenerateCyberBrief calls the configured LLM to summarize the cyber threat
+// picture from KEV, EPSS, Infocon and headlines. watchlist names products the
+// reader runs so the brief can call them out.
+func GenerateCyberBrief(ctx context.Context, cfg LLMConfig, in *cyber.Intel, items []feeds.NewsItem, watchlist []string) (*CyberBrief, error) {
+	if cfg.APIKey == "" {
+		return &CyberBrief{
+			Summary:     "No LLM_API_KEY set. Add it to ~/.config/watchtower/config.yaml to enable AI briefings.",
+			GeneratedAt: time.Now(),
+			Model:       "none",
+		}, nil
+	}
+
+	var sb strings.Builder
+	// Without today's date the model can't tell a past patch deadline from an upcoming one
+	sb.WriteString("TODAY: " + time.Now().Format("Mon Jan 02 2006") + "\n\n")
+	if in != nil {
+		infocon := in.Infocon
+		if infocon == "" {
+			infocon = "unknown"
+		}
+		sb.WriteString("SANS INFOCON: " + infocon + "\n\n")
+
+		sb.WriteString("CISA KNOWN EXPLOITED VULNERABILITIES, RECENTLY ADDED:\n")
+		if len(in.KEV) == 0 {
+			sb.WriteString("(none)\n")
+		}
+		for _, e := range in.KEV {
+			epss := "unknown"
+			if e.EPSS >= 0 {
+				epss = fmt.Sprintf("%.1f%%", e.EPSS*100)
+			}
+			ransom := ""
+			if e.Ransomware {
+				ransom = ", used by ransomware"
+			}
+			sb.WriteString(fmt.Sprintf("- %s %s %s: %s (added %s, EPSS %s%s, federal patch deadline %s)\n",
+				e.CVE, e.Vendor, e.Product, e.Name, e.DateAdded.Format("Jan 02"),
+				epss, ransom, e.DueDate.Format("Jan 02")))
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("HEADLINES:\n")
+	if len(items) > 40 {
+		items = items[:40]
+	}
+	for i, item := range items {
+		tag := item.ThreatLevel.String()
+		if item.Category != "" {
+			tag += "/" + item.Category
+		}
+		sb.WriteString(fmt.Sprintf("%d. [%s] %s (%s)\n", i+1, tag, item.Title, item.Source))
+	}
+
+	reader := ""
+	if len(watchlist) > 0 {
+		reader = "\nThe reader runs: " + strings.Join(watchlist, ", ") +
+			". Call out anything affecting these first, by name.\n"
+	}
+
+	prompt := fmt.Sprintf(`You are a cyber threat intelligence analyst. Using the data below, respond in EXACTLY this format with no extra text:
+
+SUMMARY:
+<3 sentences on the most important cyber threat developments right now>
+
+PRIORITIES:
+• <action 1, one line>
+• <action 2, one line>
+• <action 3, one line>
+• <action 4, one line>
+• <action 5, one line>
+
+Rules:
+- SUMMARY: factual, analyst-toned, no fluff, max 3 sentences
+- PRIORITIES: exactly 5 concrete things a defender should do or check, most urgent first, one line each, cite the CVE ID when one applies
+- Weigh active exploitation, ransomware use and high EPSS above everything else
+- A patch deadline before TODAY is overdue; say so
+- No markdown, no extra formatting, no preamble
+%s
+DATA:
+%s`, reader, sb.String())
+
+	text, model, err := complete(ctx, cfg, "You are a cyber threat intelligence analyst.", prompt, 600)
+	if err != nil {
+		return nil, err
+	}
+	summary, priorities := parseCyberBriefResponse(text)
+	return &CyberBrief{
+		Summary:     summary,
+		Priorities:  priorities,
+		GeneratedAt: time.Now(),
+		Model:       model,
+	}, nil
+}
+
+func parseCyberBriefResponse(content string) (string, []string) {
+	sections := parseSections(content, "SUMMARY", "PRIORITIES")
+	summary := strings.Join(strings.Fields(sections["SUMMARY"]), " ")
+	if summary == "" && len(sections) == 0 {
+		// The model ignored the format; show what it said rather than nothing
+		summary = strings.TrimSpace(content)
+	}
+	return summary, parseBullets(sections["PRIORITIES"])
 }
 
 func parseLocalBriefResponse(content string) string {

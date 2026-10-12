@@ -24,6 +24,7 @@ func (m Model) renderCyberContent() (string, int) {
 	}
 
 	var hdr strings.Builder
+	hdr.WriteString(m.renderCyberBriefPanel(innerW))
 	hdr.WriteString(m.renderThreatIntelPanel(innerW))
 	hdr.WriteString(StyleDivider.Render(strings.Repeat("─", innerW)) + "\n\n")
 
@@ -70,6 +71,55 @@ func (m Model) renderCyberContent() (string, int) {
 		}
 	}
 	return sb.String(), hdrLines
+}
+
+// maxBriefW keeps brief text at a readable line length on wide terminals
+const maxBriefW = 110
+
+// renderCyberBriefPanel renders the AI summary of the cyber threat picture
+func (m Model) renderCyberBriefPanel(w int) string {
+	var sb strings.Builder
+	sb.WriteString(StyleBriefTitle.Render("🧠  CYBER BRIEF"))
+	w = minInt(w, maxBriefW)
+
+	switch {
+	case m.cfg.LLMAPIKey == "":
+		sb.WriteString("\n\n" + StyleMuted.Render("  Add llm_api_key to ~/.config/watchtower/config.yaml to enable AI briefings.") + "\n\n")
+		return sb.String()
+	case m.loading["cyberBrief"]:
+		sb.WriteString("\n\n  " + m.spinner.View() + " Generating cyber brief with " + m.cfg.LLMProvider + "...\n\n")
+		return sb.String()
+	}
+	if errMsg, ok := m.errors["cyberBrief"]; ok {
+		sb.WriteString("\n\n" + StyleError.Render(wordWrap("⚠ "+errMsg, w-2)) + "\n")
+		sb.WriteString(StyleMuted.Render("  Press [i] to retry.") + "\n\n")
+		return sb.String()
+	}
+	if m.cyberBrief == nil {
+		sb.WriteString("\n\n" + StyleMuted.Render("  Waiting for KEV data and headlines to load...") + "\n\n")
+		return sb.String()
+	}
+
+	b := m.cyberBrief
+	sb.WriteString("   " + StyleBriefMeta.Render(b.GeneratedAt.Format("15:04")+"  "+b.Model+cacheAgeLabel(b.GeneratedAt)) + "\n\n")
+	for _, line := range strings.Split(wordWrap(b.Summary, w-2), "\n") {
+		sb.WriteString("  " + line + "\n")
+	}
+
+	if len(b.Priorities) > 0 {
+		sb.WriteString("\n" + StyleSubSectionHeader.Render(" PRIORITIES") + "\n")
+		for i, p := range b.Priorities {
+			num := fmt.Sprintf("  %d. ", i+1)
+			for j, line := range strings.Split(wordWrap(p, w-len(num)-2), "\n") {
+				if j > 0 {
+					num = strings.Repeat(" ", len(num))
+				}
+				sb.WriteString(StyleThreatItem.Render(num+line) + "\n")
+			}
+		}
+	}
+	sb.WriteString("\n")
+	return sb.String()
 }
 
 // renderThreatIntelPanel renders the Infocon level and the table of

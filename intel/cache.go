@@ -20,6 +20,7 @@ type cachedBrief struct {
 const (
 	briefCacheFile      = "brief.json"
 	localBriefCacheFile = "local_brief.json"
+	cyberBriefCacheFile = "cyber_brief.json"
 )
 
 func cachePath(name string) (string, error) {
@@ -165,4 +166,42 @@ func SaveCachedLocalBrief(b *LocalBrief) {
 // ClearLocalBriefCache deletes the cached local brief file.
 func ClearLocalBriefCache() error {
 	return clearCache(localBriefCacheFile)
+}
+
+// ─── Cyber Brief Caching ─────────────────────────────────────────────────────
+
+// cachedCyberBrief is the on-disk representation for the cyber brief
+type cachedCyberBrief struct {
+	Summary     string    `json:"summary"`
+	Priorities  []string  `json:"priorities"`
+	GeneratedAt time.Time `json:"generated_at"`
+	Model       string    `json:"model"`
+}
+
+// LoadCachedCyberBrief reads the cached cyber brief from disk.
+func LoadCachedCyberBrief(maxAge time.Duration) (*CyberBrief, error) {
+	var cb cachedCyberBrief
+	ok, err := readCache(cyberBriefCacheFile, &cb)
+	if !ok || expired(cb.GeneratedAt, maxAge) {
+		return nil, err
+	}
+	return &CyberBrief{
+		Summary:     cb.Summary,
+		Priorities:  cb.Priorities,
+		GeneratedAt: cb.GeneratedAt,
+		Model:       cb.Model,
+	}, nil
+}
+
+// SaveCachedCyberBrief writes the cyber brief to disk
+func SaveCachedCyberBrief(b *CyberBrief) {
+	if b == nil {
+		return
+	}
+	writeCache(cyberBriefCacheFile, cachedCyberBrief{
+		Summary:     b.Summary,
+		Priorities:  b.Priorities,
+		GeneratedAt: b.GeneratedAt,
+		Model:       b.Model,
+	})
 }
