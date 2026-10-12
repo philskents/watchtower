@@ -95,13 +95,10 @@ type Model struct {
 	brief        *intel.Brief
 	localBrief   *intel.LocalBrief
 
-	// News selection (for browser open)
-	selectedNewsIdx      int
-	newsHeaderLines      int // line count of the header above the article list (for scroll tracking)
-	selectedLocalNewsIdx int
-	localNewsHeaderLines int
-	statusMsg            string
-	statusExpiry         time.Time
+	// Article selection per list tab (for browser open)
+	sel          [tabCount]listSelection
+	statusMsg    string
+	statusExpiry time.Time
 
 	// State
 	loading     map[string]bool
@@ -229,217 +226,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, fetchLocalBrief(intel.LLMConfig{Provider: intel.Provider(m.cfg.LLMProvider), APIKey: m.cfg.LLMAPIKey, Model: m.cfg.LLMModel}, m.cfg.Location.City, m.localNews, m.weatherCond, m.forecast, m.cfg.BriefCacheMins, true))
 			}
 		case "j", "down":
-			if m.activeTab == TabNews && len(m.globalNews) > 0 {
-				m.selectedNewsIdx = minInt(m.selectedNewsIdx+1, len(m.globalNews)-1)
-				{
-					newsContent, hdrLines := m.renderNewsContent()
-					m.newsHeaderLines = hdrLines
-					m.viewports[TabNews].SetContent(newsContent)
-				}
-				scrollNewsIntoView(&m.viewports[TabNews], m.newsHeaderLines, m.selectedNewsIdx)
-				cmds = append(cmds, func() tea.Msg {
-					return tea.WindowSizeMsg{
-						Width:  m.width,
-						Height: m.height,
-					}
-				})
-			} else if m.activeTab == TabLocal && len(m.localNews) > 0 {
-				m.selectedLocalNewsIdx = minInt(m.selectedLocalNewsIdx+1, len(m.localNews)-1)
-				{
-					newsContent, hdrLines := m.renderLocalContent()
-					m.localNewsHeaderLines = hdrLines
-					m.viewports[TabLocal].SetContent(newsContent)
-				}
-				scrollNewsIntoView(&m.viewports[TabLocal], m.localNewsHeaderLines, m.selectedLocalNewsIdx)
-				cmds = append(cmds, func() tea.Msg {
-					return tea.WindowSizeMsg{
-						Width:  m.width,
-						Height: m.height,
-					}
-				})
-			} else {
+			if !m.moveSelection(m.activeTab, 1) {
 				m.viewports[m.activeTab].LineDown(1)
 			}
 		case "k", "up":
-			if m.activeTab == TabNews && len(m.globalNews) > 0 {
-				m.selectedNewsIdx = maxInt(m.selectedNewsIdx-1, 0)
-				{
-					newsContent, hdrLines := m.renderNewsContent()
-					m.newsHeaderLines = hdrLines
-					m.viewports[TabNews].SetContent(newsContent)
-				}
-				scrollNewsIntoView(&m.viewports[TabNews], m.newsHeaderLines, m.selectedNewsIdx)
-				cmds = append(cmds, func() tea.Msg {
-					return tea.WindowSizeMsg{
-						Width:  m.width,
-						Height: m.height,
-					}
-				})
-			} else if m.activeTab == TabLocal && len(m.localNews) > 0 {
-				m.selectedLocalNewsIdx = maxInt(m.selectedLocalNewsIdx-1, 0)
-				{
-					newsContent, hdrLines := m.renderLocalContent()
-					m.localNewsHeaderLines = hdrLines
-					m.viewports[TabLocal].SetContent(newsContent)
-				}
-				scrollNewsIntoView(&m.viewports[TabLocal], m.localNewsHeaderLines, m.selectedLocalNewsIdx)
-				cmds = append(cmds, func() tea.Msg {
-					return tea.WindowSizeMsg{
-						Width:  m.width,
-						Height: m.height,
-					}
-				})
-			} else {
+			if !m.moveSelection(m.activeTab, -1) {
 				m.viewports[m.activeTab].LineUp(1)
 			}
-		case "enter":
-			if m.activeTab == TabNews && m.selectedNewsIdx < len(m.globalNews) {
-				item := m.globalNews[m.selectedNewsIdx]
-				if item.URL != "" {
-					cmds = append(cmds, openURL(item.URL))
-					m.statusMsg = "Opening: " + truncate(item.Title, 60)
-					m.statusExpiry = time.Now().Add(3 * time.Second)
-				} else {
-					m.statusMsg = "No URL available for this article"
-					m.statusExpiry = time.Now().Add(3 * time.Second)
-				}
-			} else if m.activeTab == TabLocal && m.selectedLocalNewsIdx < len(m.localNews) {
-				item := m.localNews[m.selectedLocalNewsIdx]
-				if item.URL != "" {
-					cmds = append(cmds, openURL(item.URL))
-					m.statusMsg = "Opening: " + truncate(item.Title, 60)
-					m.statusExpiry = time.Now().Add(3 * time.Second)
-				} else {
-					m.statusMsg = "No URL available for this article"
-					m.statusExpiry = time.Now().Add(3 * time.Second)
-				}
-			}
 		case "d":
-			switch m.activeTab {
-			case TabNews:
-				m.selectedNewsIdx = minInt(m.selectedNewsIdx+10, maxInt(len(m.globalNews)-1, 0))
-				{
-					newsContent, hdrLines := m.renderNewsContent()
-					m.newsHeaderLines = hdrLines
-					m.viewports[TabNews].SetContent(newsContent)
-				}
-				scrollNewsIntoView(&m.viewports[TabNews], m.newsHeaderLines, m.selectedNewsIdx)
-				// Force a redraw by sending a WindowSizeMsg
-				cmds = append(cmds, func() tea.Msg {
-					return tea.WindowSizeMsg{
-						Width:  m.width,
-						Height: m.height,
-					}
-				})
-			case TabLocal:
-				m.selectedLocalNewsIdx = minInt(m.selectedLocalNewsIdx+10, maxInt(len(m.localNews)-1, 0))
-				{
-					newsContent, hdrLines := m.renderLocalContent()
-					m.localNewsHeaderLines = hdrLines
-					m.viewports[TabLocal].SetContent(newsContent)
-				}
-				scrollNewsIntoView(&m.viewports[TabLocal], m.localNewsHeaderLines, m.selectedLocalNewsIdx)
-				cmds = append(cmds, func() tea.Msg {
-					return tea.WindowSizeMsg{
-						Width:  m.width,
-						Height: m.height,
-					}
-				})
-			default:
+			if !m.moveSelection(m.activeTab, 10) {
 				m.viewports[m.activeTab].HalfViewDown()
 			}
 		case "u":
-			switch m.activeTab {
-			case TabNews:
-				m.selectedNewsIdx = maxInt(m.selectedNewsIdx-10, 0)
-				{
-					newsContent, hdrLines := m.renderNewsContent()
-					m.newsHeaderLines = hdrLines
-					m.viewports[TabNews].SetContent(newsContent)
-				}
-				scrollNewsIntoView(&m.viewports[TabNews], m.newsHeaderLines, m.selectedNewsIdx)
-				// Force a redraw by sending a WindowSizeMsg
-				cmds = append(cmds, func() tea.Msg {
-					return tea.WindowSizeMsg{
-						Width:  m.width,
-						Height: m.height,
-					}
-				})
-			case TabLocal:
-				m.selectedLocalNewsIdx = maxInt(m.selectedLocalNewsIdx-10, 0)
-				{
-					newsContent, hdrLines := m.renderLocalContent()
-					m.localNewsHeaderLines = hdrLines
-					m.viewports[TabLocal].SetContent(newsContent)
-				}
-				scrollNewsIntoView(&m.viewports[TabLocal], m.localNewsHeaderLines, m.selectedLocalNewsIdx)
-				cmds = append(cmds, func() tea.Msg {
-					return tea.WindowSizeMsg{
-						Width:  m.width,
-						Height: m.height,
-					}
-				})
-			default:
+			if !m.moveSelection(m.activeTab, -10) {
 				m.viewports[m.activeTab].HalfViewUp()
 			}
 		case "G":
-			switch m.activeTab {
-			case TabNews:
-				m.selectedNewsIdx = maxInt(len(m.globalNews)-1, 0)
-				{
-					newsContent, hdrLines := m.renderNewsContent()
-					m.newsHeaderLines = hdrLines
-					m.viewports[TabNews].SetContent(newsContent)
-				}
-				scrollNewsIntoView(&m.viewports[TabNews], m.newsHeaderLines, m.selectedNewsIdx)
-				// Force a redraw by sending a WindowSizeMsg
-				cmds = append(cmds, func() tea.Msg {
-					return tea.WindowSizeMsg{
-						Width:  m.width,
-						Height: m.height,
-					}
-				})
-			case TabLocal:
-				m.selectedLocalNewsIdx = maxInt(len(m.localNews)-1, 0)
-				{
-					newsContent, hdrLines := m.renderLocalContent()
-					m.localNewsHeaderLines = hdrLines
-					m.viewports[TabLocal].SetContent(newsContent)
-				}
-				scrollNewsIntoView(&m.viewports[TabLocal], m.localNewsHeaderLines, m.selectedLocalNewsIdx)
-			default:
+			if items := m.listItems(m.activeTab); len(items) > 0 {
+				m.selectItem(m.activeTab, len(items)-1)
+			} else {
 				m.viewports[m.activeTab].GotoBottom()
 			}
 		case "g":
-			switch m.activeTab {
-			case TabNews:
-				m.selectedNewsIdx = 0
-				newsContent, hdrLines := m.renderNewsContent()
-				m.newsHeaderLines = hdrLines
-				m.viewports[TabNews].SetContent(newsContent)
-				m.viewports[TabNews].GotoTop()
-
-				cmds = append(cmds, func() tea.Msg {
-					return tea.WindowSizeMsg{
-						Width:  m.width,
-						Height: m.height,
-					}
-				})
-			case TabLocal:
-				m.selectedLocalNewsIdx = 0
-				newsContent, hdrLines := m.renderLocalContent()
-				m.localNewsHeaderLines = hdrLines
-				m.viewports[TabLocal].SetContent(newsContent)
-				m.viewports[TabLocal].GotoTop()
-
-				cmds = append(cmds, func() tea.Msg {
-					return tea.WindowSizeMsg{
-						Width:  m.width,
-						Height: m.height,
-					}
-				})
-			default:
+			if len(m.listItems(m.activeTab)) > 0 {
+				m.selectItem(m.activeTab, 0)
+			} else {
 				m.viewports[m.activeTab].GotoTop()
+			}
+		case "enter":
+			items := m.listItems(m.activeTab)
+			if idx := m.sel[m.activeTab].idx; idx < len(items) {
+				item := items[idx]
+				if item.URL != "" {
+					cmds = append(cmds, openURL(item.URL))
+					m.statusMsg = "Opening: " + truncate(item.Title, 60)
+				} else {
+					m.statusMsg = "No URL available for this article"
+				}
+				m.statusExpiry = time.Now().Add(3 * time.Second)
 			}
 		}
 
@@ -471,11 +295,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, fetchBrief(intel.LLMConfig{Provider: intel.Provider(m.cfg.LLMProvider), APIKey: m.cfg.LLMAPIKey, Model: m.cfg.LLMModel}, m.globalNews, m.cfg.BriefCacheMins, false))
 			}
 		}
-		{
-			newsContent, hdrLines := m.renderNewsContent()
-			m.newsHeaderLines = hdrLines
-			m.viewports[TabNews].SetContent(newsContent)
-		}
+		m.renderListTab(TabNews)
 		m.viewports[TabOverview].SetContent(m.renderOverviewContent())
 
 	case localNewsMsg:
@@ -490,11 +310,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, fetchLocalBrief(intel.LLMConfig{Provider: intel.Provider(m.cfg.LLMProvider), APIKey: m.cfg.LLMAPIKey, Model: m.cfg.LLMModel}, m.cfg.Location.City, m.localNews, m.weatherCond, m.forecast, m.cfg.BriefCacheMins, false))
 			}
 		}
-		{
-			content, hdrLines := m.renderLocalContent()
-			m.localNewsHeaderLines = hdrLines
-			m.viewports[TabLocal].SetContent(content)
-		}
+		m.renderListTab(TabLocal)
 
 	case cryptoMsg:
 		delete(m.loading, "crypto")
@@ -549,11 +365,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, fetchLocalBrief(intel.LLMConfig{Provider: intel.Provider(m.cfg.LLMProvider), APIKey: m.cfg.LLMAPIKey, Model: m.cfg.LLMModel}, m.cfg.Location.City, m.localNews, m.weatherCond, m.forecast, m.cfg.BriefCacheMins, false))
 			}
 		}
-		{
-			content, hdrLines := m.renderLocalContent()
-			m.localNewsHeaderLines = hdrLines
-			m.viewports[TabLocal].SetContent(content)
-		}
+		m.renderListTab(TabLocal)
 		m.viewports[TabOverview].SetContent(m.renderOverviewContent())
 
 	case briefMsg:
@@ -575,11 +387,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.viewports[TabOverview].SetContent(m.renderOverviewContent())
 		// Re-render news pane too so country risk header updates
-		{
-			newsContent, hdrLines := m.renderNewsContent()
-			m.newsHeaderLines = hdrLines
-			m.viewports[TabNews].SetContent(newsContent)
-		}
+		m.renderListTab(TabNews)
 
 	case localBriefMsg:
 		delete(m.loading, "localBrief")
@@ -597,11 +405,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.statusExpiry = time.Now().Add(4 * time.Second)
 		}
-		{
-			content, hdrLines := m.renderLocalContent()
-			m.localNewsHeaderLines = hdrLines
-			m.viewports[TabLocal].SetContent(content)
-		}
+		m.renderListTab(TabLocal)
 
 	case openURLMsg:
 		// No-op — the Cmd already ran xdg-open/open; nothing to update
@@ -1086,7 +890,7 @@ func (m Model) renderNewsContent() (string, int) {
 			urlIndicator = StyleMuted.Render("  ↗")
 		}
 
-		if i == m.selectedNewsIdx {
+		if i == m.sel[TabNews].idx {
 			// Highlighted selected row
 			titleStyled := StyleSelectedTitle.Render(titleLine)
 			line1 := fmt.Sprintf("%s %s  %s%s", badge, source, age, urlIndicator)
@@ -1336,6 +1140,7 @@ func (m Model) renderLocalContent() (string, int) {
 	sb.WriteString("\n")
 	sb.WriteString(localBriefBlock)
 	sb.WriteString("\n")
+	hdrLines += 2 // the two separator lines above
 	localHdr := StyleSectionHeader.Render(" LOCAL NEWS  " + m.cfg.Location.City)
 	sb.WriteString(localHdr + "\n\n")
 	hdrLines += strings.Count(localHdr+"\n\n", "\n")
@@ -1362,7 +1167,7 @@ func (m Model) renderLocalContent() (string, int) {
 				urlIndicator = StyleMuted.Render("  ↗")
 			}
 
-			if i == m.selectedLocalNewsIdx {
+			if i == m.sel[TabLocal].idx {
 				titleLine := item.Title
 				line1 := badge + " " + age + urlIndicator
 				line2 := "  " + StyleSelectedTitle.Render(titleLine)
@@ -1379,7 +1184,7 @@ func (m Model) renderLocalContent() (string, int) {
 }
 
 // scrollNewsToSelected adjusts the news viewport so the selected article stays visible.
-// Each article is exactly 3 lines. Called after selectedNewsIdx or content changes.
+// Each article is exactly 3 lines. Called after the selection or content changes.
 // vp is a pointer to m.viewports[TabNews] from the calling Update copy.
 func scrollNewsIntoView(vp *viewport.Model, headerLines, selectedIdx int) {
 	// When selectedIdx is 0, show the country risk panel at the top
@@ -1409,6 +1214,58 @@ func scrollNewsIntoView(vp *viewport.Model, headerLines, selectedIdx int) {
 		vp.SetYOffset(itemBottom - vpH + 1)
 	}
 	// Otherwise already visible — no change
+}
+
+// ─── List tabs ────────────────────────────────────────────────────────────────
+
+// listSelection tracks the selected article in a list tab and the line count
+// of the header rendered above the article list (for scroll tracking)
+type listSelection struct {
+	idx      int
+	hdrLines int
+}
+
+// listItems returns the selectable articles for a tab, or nil if the tab has no article list
+func (m *Model) listItems(tab int) []feeds.NewsItem {
+	switch tab {
+	case TabNews:
+		return m.globalNews
+	case TabLocal:
+		return m.localNews
+	}
+	return nil
+}
+
+// renderListTab re-renders a list tab into its viewport and records its header height
+func (m *Model) renderListTab(tab int) {
+	var content string
+	switch tab {
+	case TabNews:
+		content, m.sel[tab].hdrLines = m.renderNewsContent()
+	case TabLocal:
+		content, m.sel[tab].hdrLines = m.renderLocalContent()
+	default:
+		return
+	}
+	m.viewports[tab].SetContent(content)
+}
+
+// selectItem moves a list tab's selection to idx (clamped) and scrolls it into view
+func (m *Model) selectItem(tab, idx int) {
+	n := len(m.listItems(tab))
+	m.sel[tab].idx = maxInt(minInt(idx, n-1), 0)
+	m.renderListTab(tab)
+	scrollNewsIntoView(&m.viewports[tab], m.sel[tab].hdrLines, m.sel[tab].idx)
+}
+
+// moveSelection shifts a list tab's selection by delta; it reports false when
+// the tab has no articles so the caller can fall back to plain scrolling
+func (m *Model) moveSelection(tab, delta int) bool {
+	if len(m.listItems(tab)) == 0 {
+		return false
+	}
+	m.selectItem(tab, m.sel[tab].idx+delta)
+	return true
 }
 
 // ─── Tea commands ─────────────────────────────────────────────────────────────
